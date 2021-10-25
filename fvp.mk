@@ -53,10 +53,9 @@ else
 EDK2_BUILD		?= RELEASE
 endif
 EDK2_BIN		?= $(EDK2_PLATFORMS_PATH)/Build/ArmVExpress-FVP-AArch64/$(EDK2_BUILD)_$(EDK2_TOOLCHAIN)/FV/FVP_$(EDK2_ARCH)_EFI.fd
-FOUNDATION_PATH		?= $(ROOT)/Foundation_Platformpkg
 BASE_FVP_PATH		?= $(ROOT)/FVP_Base_RevC-2xAEMv8A
-ifeq ($(wildcard $(FOUNDATION_PATH)),)
-$(error $(FOUNDATION_PATH) does not exist)
+ifeq ($(wildcard $(BASE_FVP_PATH)),)
+$(error $(BASE_FVP_PATH) does not exist)
 endif
 GRUB_PATH		?= $(ROOT)/grub
 GRUB_CONFIG_PATH	?= $(BUILD_PATH)/fvp/grub
@@ -73,15 +72,15 @@ DEFCONFIG_TPM_MODULE ?= --br-defconfig build/br-ext/configs/linux_ftpm
 DEFCONFIG_TSS ?= --br-defconfig build/br-ext/configs/tss
 endif
 
-TITANIUM_PATH   ?= $(ROOT)/titanium
-TITANIUM_BUILD_PATH   ?= $(ROOT)/titanium/build
-TITANIUM_IMAGE  ?= $(TITANIUM_PATH)/build/titanium.bin
+S_VISOR_PATH   ?= $(ROOT)/s-visor
+S_VISOR_BUILD_PATH   ?= $(ROOT)/s-visor/build
+S_VISOR_IMAGE  ?= $(S_VISOR_PATH)/build/s_visor.bin
 ################################################################################
 # Targets
 ################################################################################
-all: arm-tf titanium boot-img linux edk2
+all: toolchains arm-tf s-visor boot-img linux edk2
 clean: arm-tf-clean boot-img-clean buildroot-clean edk2-clean grub-clean \
-    titanium-clean
+    s-visor-clean
 
 include toolchain.mk
 
@@ -94,31 +93,23 @@ $(OUT_PATH):
 ################################################################################
 # TITATNIUM
 ################################################################################
-titanium: titanium-clean
-	cmake -H$(TITANIUM_PATH) -B$(TITANIUM_BUILD_PATH) -G "Ninja"
-	ninja -C $(TITANIUM_BUILD_PATH)
+s-visor: s-visor-clean md5
+	cmake -H$(S_VISOR_PATH) -B$(S_VISOR_BUILD_PATH) -G "Ninja"
+	ninja -C $(S_VISOR_BUILD_PATH)
 
-titanium-clean:
-	rm -rf $(TITANIUM_BUILD_PATH)
+s-visor-clean:
+	rm -rf $(S_VISOR_BUILD_PATH)
 
+md5:
+	cd $(S_VISOR_PATH)/scripts && ./gen_image_md5_per_page.sh
 ################################################################################
 # ARM Trusted Firmware
 ################################################################################
 TF_A_EXPORTS ?= \
 	CROSS_COMPILE="$(CCACHE)$(AARCH64_CROSS_COMPILE)"
 
-#TF_A_FLAGS ?= \
-#	BL32=$(OPTEE_OS_HEADER_V2_BIN) \
-#	BL32_EXTRA1=$(OPTEE_OS_PAGER_V2_BIN) \
-#	BL32_EXTRA2=$(OPTEE_OS_PAGEABLE_V2_BIN) \
-#	BL33=$(EDK2_BIN) \
-#	ARM_TSP_RAM_LOCATION=tdram \
-#	FVP_USE_GIC_DRIVER=FVP_GICV3 \
-#	PLAT=fvp \
-#	SPD=opteed
-
 TF_A_FLAGS ?= \
-	BL32=$(TITANIUM_IMAGE) \
+	BL32=$(S_VISOR_IMAGE) \
 	BL33=$(EDK2_BIN) \
 	ARM_TSP_RAM_LOCATION=tdram \
 	FVP_USE_GIC_DRIVER=FVP_GICV3 \
@@ -140,8 +131,7 @@ else
 		      EVENT_LOG_LEVEL=20
 endif
 
-#arm-tf: titanium edk2
-arm-tf:
+arm-tf: s-visor
 	$(TF_A_EXPORTS) $(MAKE) -C $(TF_A_PATH) $(TF_A_FLAGS) all fip
 
 arm-tf-clean:
@@ -169,8 +159,7 @@ edk2-clean: edk2-clean-common
 ################################################################################
 LINUX_DEFCONFIG_COMMON_ARCH := arm64
 LINUX_DEFCONFIG_COMMON_FILES := \
-		$(LINUX_PATH)/arch/arm64/configs/defconfig \
-		$(CURDIR)/kconfigs/fvp.conf
+		$(LINUX_PATH)/arch/arm64/configs/prototype-config
 
 .PHONY: linux-ftpm-module
 linux-ftpm-module: linux
@@ -260,7 +249,7 @@ optee-os-clean: ftpm-clean optee-os-clean-common
 ################################################################################
 
 .PHONY: boot-img
-boot-img: 
+boot-img: linux grub buildroot
 	$(eval dev_name := $(shell sudo losetup -Pf --show $(BOOT_IMG)))
 	$(eval subdev_name := $(dev_name)p1)
 	@if [ -e $(RAMDISK_MNT_PATH) ]; then rm -r $(RAMDISK_MNT_PATH); fi
@@ -276,17 +265,6 @@ boot-img:
 	sudo cp $(GRUB_CONFIG_PATH)/grub.cfg $(RAMDISK_MNT_PATH)/EFI/BOOT/grub.cfg
 	sudo umount $(RAMDISK_MNT_PATH)
 	sudo losetup -d $(dev_name)
-
-#boot-img: grub buildroot linux
-#	rm -f $(BOOT_IMG)
-#	mformat -i $(BOOT_IMG) -n 64 -h 255 -T 131072 -v "BOOT IMG" -C ::
-#	mcopy -i $(BOOT_IMG) $(LINUX_PATH)/arch/arm64/boot/Image ::
-#	mcopy -i $(BOOT_IMG) $(LINUX_PATH)/arch/arm64/boot/dts/arm/foundation-v8-gicv3-psci.dtb ::
-#	mmd -i $(BOOT_IMG) ::/EFI
-#	mmd -i $(BOOT_IMG) ::/EFI/BOOT
-#	mcopy -i $(BOOT_IMG) $(ROOT)/out-br/images/rootfs.cpio.gz ::/initrd.img
-#	mcopy -i $(BOOT_IMG) $(GRUB_BIN) ::/EFI/BOOT/bootaa64.efi
-#	mcopy -i $(BOOT_IMG) $(GRUB_CONFIG_PATH)/grub.cfg ::/EFI/BOOT/grub.cfg
 
 .PHONY: boot-img-clean
 boot-img-clean:
@@ -305,27 +283,12 @@ run-only:
 	-C cluster0.has_arm_v8-5=1 \
 	-C cluster0.NUM_CORES=4 \
 	-C cluster0.scheduler_mode=2 \
-	-C bp.hostbridge.userNetworking=1 \
-	-C bp.smsc_91c111.enabled=1 \
-	-C bp.hostbridge.userNetPorts=8022=22 \
+	-C bp.hostbridge.interfaceName="tap0" \
+	-C bp.smsc_91c111.enabled=true \
 	-C bp.secure_memory=true \
 	-C bp.dram_size=8 \
 	--data="$(TF_A_PATH)/build/fvp/$(TF_A_BUILD)/bl1.bin"@0x0  \
 	--data="$(TF_A_PATH)/build/fvp/$(TF_A_BUILD)/fip.bin"@0x8000000 \
 	-C bp.virtioblockdevice.image_path=$(BOOT_IMG) \
-	-C bp.virtioblockdevice.quiet=1 \
-	--plugin /usr/local/DS-5_v5.29.3/sw/models/bin/MTS.so \
-	--cadi-server
+	-C bp.virtioblockdevice.quiet=1 
 
-#run-only:
-#	@cd $(FOUNDATION_PATH); \
-#	$(FOUNDATION_PATH)/models/Linux64_GCC-6.4/Foundation_Platform \
-#	--arm-v8.5 \
-#	--cores=4 \
-#	--secure-memory \
-#	--visualization \
-#	--gicv3 \
-#	--data="$(TF_A_PATH)/build/fvp/$(TF_A_BUILD)/bl1.bin"@0x0 \
-#	--data="$(TF_A_PATH)/build/fvp/$(TF_A_BUILD)/fip.bin"@0x8000000 \
-#	--block-device=$(BOOT_IMG) \
-#	--cadi-server

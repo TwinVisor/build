@@ -363,10 +363,6 @@ buildroot-domu-cleaner:
 ################################################################################
 # Linux
 ################################################################################
-ifeq ($(CFG_TEE_BENCHMARK),y)
-LINUX_DEFCONFIG_BENCH ?= $(CURDIR)/kconfigs/tee_bench.conf
-endif
-
 LINUX_COMMON_FLAGS ?= LOCALVERSION= CROSS_COMPILE=$(CROSS_COMPILE_NS_KERNEL)
 
 .PHONY: linux-common
@@ -376,8 +372,7 @@ linux-common: linux-defconfig
 $(LINUX_PATH)/.config: $(LINUX_DEFCONFIG_COMMON_FILES)
 	cd $(LINUX_PATH) && \
 		ARCH=$(LINUX_DEFCONFIG_COMMON_ARCH) \
-		scripts/kconfig/merge_config.sh $(LINUX_DEFCONFIG_COMMON_FILES) \
-			$(LINUX_DEFCONFIG_BENCH)
+		scripts/kconfig/merge_config.sh $(LINUX_DEFCONFIG_COMMON_FILES)
 
 .PHONY: linux-defconfig-clean-common
 linux-defconfig-clean-common:
